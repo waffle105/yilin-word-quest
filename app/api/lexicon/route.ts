@@ -1,5 +1,5 @@
-import { env } from "cloudflare:workers";
 import { SEED_LEXICON } from "@/app/data/words";
+import database from "@/lib/tencent-db";
 
 type LexiconItem = { word: string; ipa: string; meaning: string; source: string };
 const clean = (value: string) => value.replace(/<[^>]*>/g, "").replace(/\s+/g, " ").trim();
@@ -7,8 +7,8 @@ const clean = (value: string) => value.replace(/<[^>]*>/g, "").replace(/\s+/g, "
 async function lookup(word: string): Promise<LexiconItem> {
   const seeded = SEED_LEXICON[word];
   if (seeded) return { word, ipa: seeded[0], meaning: seeded[1], source: "curated" };
-  const cached = await env.DB.prepare("SELECT word, ipa, meaning, source FROM lexicon_cache WHERE word = ?")
-    .bind(word).first<LexiconItem>();
+  const cached = database.prepare("SELECT word, ipa, meaning, source FROM lexicon_cache WHERE word = ?")
+    .get(word) as LexiconItem | undefined;
   if (cached) return cached;
   try {
     const response = await fetch(`https://dict.youdao.com/jsonapi?q=${encodeURIComponent(word)}`, { headers: { "User-Agent": "Yilin-Word-Quest/1.0" } });
@@ -20,10 +20,10 @@ async function lookup(word: string): Promise<LexiconItem> {
       .filter((value: unknown): value is string => typeof value === "string").map(clean).slice(0, 3);
     if (!phone || meanings.length === 0) throw new Error("dictionary entry incomplete");
     const item = { word, ipa: `/${phone}/`, meaning: meanings.join("；"), source: "dictionary" };
-    await env.DB.prepare(`INSERT INTO lexicon_cache (word, ipa, meaning, source, updated_at)
+    database.prepare(`INSERT INTO lexicon_cache (word, ipa, meaning, source, updated_at)
       VALUES (?, ?, ?, ?, ?) ON CONFLICT(word) DO UPDATE SET ipa = excluded.ipa,
       meaning = excluded.meaning, source = excluded.source, updated_at = excluded.updated_at`)
-      .bind(word, item.ipa, item.meaning, item.source, new Date().toISOString()).run();
+      .run(word, item.ipa, item.meaning, item.source, new Date().toISOString());
     return item;
   } catch (error) {
     console.error("dictionary lookup failed", word, error);
